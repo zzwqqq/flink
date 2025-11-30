@@ -72,10 +72,12 @@ class RowTimeRangeBoundedPrecedingFunctionTest extends RowTimeOverWindowTestBase
                 .as("State has not been cleaned up")
                 .isEqualTo(1);
 
-
         ValueStateDescriptor<Long> lastTriggeringTsDescriptor =
-                new ValueStateDescriptor<Long>("lastTriggeringTsState", Types.LONG);
-        ValueState<Long> lastTriggeringTsState = (ValueState<Long>) stateBackend.getOrCreateKeyedState(VoidNamespaceSerializer.INSTANCE, lastTriggeringTsDescriptor);
+                new ValueStateDescriptor<>("lastTriggeringTsState", Types.LONG);
+        ValueState<Long> lastTriggeringTsState =
+                (ValueState<Long>)
+                        stateBackend.getOrCreateKeyedState(
+                                VoidNamespaceSerializer.INSTANCE, lastTriggeringTsDescriptor);
         assertThat(lastTriggeringTsState.value()).isEqualTo(500L);
     }
 
