@@ -18,10 +18,10 @@
 
 package org.apache.flink.table.planner.operations.converters.table;
 
-import org.apache.flink.sql.parser.ddl.SqlAlterTable;
+import org.apache.flink.sql.parser.ddl.table.SqlAlterTable;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.ValidationException;
-import org.apache.flink.table.catalog.CatalogBaseTable;
+import org.apache.flink.table.catalog.CatalogBaseTable.TableKind;
 import org.apache.flink.table.catalog.CatalogManager;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ContextResolvedTable;
@@ -36,8 +36,6 @@ import org.apache.flink.table.operations.ddl.AlterTableChangeOperation;
 import org.apache.flink.table.operations.utils.ValidationUtils;
 import org.apache.flink.table.planner.operations.converters.SqlNodeConverter;
 
-import org.apache.calcite.sql.SqlIdentifier;
-
 import java.util.List;
 import java.util.Optional;
 
@@ -51,9 +49,9 @@ public abstract class AbstractAlterTableConverter<T extends SqlAlterTable>
 
     @Override
     public final Operation convertSqlNode(T sqlAlterTable, ConvertContext context) {
-        CatalogManager catalogManager = context.getCatalogManager();
+        final CatalogManager catalogManager = context.getCatalogManager();
         final ObjectIdentifier tableIdentifier = resolveIdentifier(sqlAlterTable, context);
-        Optional<ContextResolvedTable> optionalCatalogTable =
+        final Optional<ContextResolvedTable> optionalCatalogTable =
                 catalogManager.getTable(tableIdentifier);
 
         if (optionalCatalogTable.isEmpty() || optionalCatalogTable.get().isTemporary()) {
@@ -65,9 +63,7 @@ public abstract class AbstractAlterTableConverter<T extends SqlAlterTable>
                             "Table %s doesn't exist or is a temporary table.", tableIdentifier));
         }
         ValidationUtils.validateTableKind(
-                optionalCatalogTable.get().getTable(),
-                CatalogBaseTable.TableKind.TABLE,
-                "alter table");
+                optionalCatalogTable.get().getTable(), TableKind.TABLE, "alter table");
 
         return convertToOperation(
                 sqlAlterTable, optionalCatalogTable.get().getResolvedTable(), context);
@@ -97,16 +93,6 @@ public abstract class AbstractAlterTableConverter<T extends SqlAlterTable>
                 tableChanges,
                 builder.build(),
                 alterTable.ifTableExists());
-    }
-
-    protected static String getColumnName(SqlIdentifier identifier) {
-        if (!identifier.isSimple()) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "%sAlter nested row type %s is not supported yet.",
-                            EX_MSG_PREFIX, identifier));
-        }
-        return identifier.getSimple();
     }
 
     protected final ObjectIdentifier resolveIdentifier(SqlAlterTable node, ConvertContext context) {

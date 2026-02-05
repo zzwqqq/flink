@@ -20,21 +20,26 @@ package org.apache.flink.sql.parser;
 
 import org.apache.flink.sql.parser.ddl.SqlTableOption;
 
-import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlLiteral;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
 import org.apache.calcite.util.NlsString;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /** Utils methods for parsing DDLs. */
 public class SqlParseUtils {
+    private static final Logger LOG = LoggerFactory.getLogger(SqlParseUtils.class);
 
     private SqlParseUtils() {}
 
@@ -84,17 +89,30 @@ public class SqlParseUtils {
         if (propList == null) {
             return Map.of();
         }
-        return propList.getList().stream()
-                .map(p -> (SqlTableOption) p)
-                .collect(Collectors.toMap(k -> k.getKeyString(), SqlTableOption::getValueString));
+        final Map<String, String> result = new HashMap<>();
+        for (SqlNode node : propList) {
+            final SqlTableOption tableOption = (SqlTableOption) node;
+            final String key = tableOption.getKeyString();
+            if (result.put(key, tableOption.getValueString()) != null) {
+                LOG.warn("There are duplicated values for the same key {}", key);
+            }
+        }
+        return result;
     }
 
-    public static List<String> extractList(@Nullable SqlNodeList sqlNodeList) {
+    public static List<String> extractList(
+            @Nullable SqlNodeList sqlNodeList, Function<SqlNode, String> mapper) {
         if (sqlNodeList == null) {
             return List.of();
         }
-        return sqlNodeList.getList().stream()
-                .map(p -> ((SqlIdentifier) p).getSimple())
-                .collect(Collectors.toList());
+        return sqlNodeList.getList().stream().map(mapper).collect(Collectors.toList());
+    }
+
+    public static Set<String> extractSet(
+            @Nullable SqlNodeList sqlNodeList, Function<SqlNode, String> mapper) {
+        if (sqlNodeList == null) {
+            return Set.of();
+        }
+        return sqlNodeList.getList().stream().map(mapper).collect(Collectors.toSet());
     }
 }

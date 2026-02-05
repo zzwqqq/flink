@@ -18,9 +18,9 @@
 
 package org.apache.flink.table.planner.operations.converters.table;
 
-import org.apache.flink.sql.parser.ddl.SqlAlterDistribution;
-import org.apache.flink.sql.parser.ddl.SqlAlterDistribution.SqlAddDistribution;
-import org.apache.flink.sql.parser.ddl.SqlAlterTable;
+import org.apache.flink.sql.parser.ddl.table.SqlAlterTable;
+import org.apache.flink.sql.parser.ddl.table.SqlAlterTableDistribution;
+import org.apache.flink.sql.parser.ddl.table.SqlAlterTableDistribution.SqlAlterTableAddDistribution;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.TableChange;
@@ -31,13 +31,13 @@ import org.apache.flink.table.planner.utils.OperationConverterUtils;
 import java.util.List;
 import java.util.Optional;
 
-/** A converter for {@link SqlAlterDistribution} for ADD call. */
+/** A converter for {@link SqlAlterTableDistribution} for ADD call. */
 public class SqlAlterTableAddDistributionConverter
-        extends AbstractAlterTableConverter<SqlAddDistribution> {
+        extends AbstractAlterTableConverter<SqlAlterTableAddDistribution> {
 
     @Override
     protected Operation convertToOperation(
-            SqlAddDistribution sqlAddDistribution,
+            SqlAlterTableAddDistribution sqlAddDistribution,
             ResolvedCatalogTable oldTable,
             ConvertContext context) {
         return buildAlterTableChangeOperation(
@@ -57,11 +57,11 @@ public class SqlAlterTableAddDistributionConverter
         if (oldDistribution.isPresent()) {
             throw new ValidationException(
                     String.format(
-                            "%sThe base table has already defined the distribution `%s`. "
+                            "%sThe current table has already defined the distribution '%s'. "
                                     + "You can modify it or drop it before adding a new one.",
                             EX_MSG_PREFIX, oldDistribution.get()));
         }
         return OperationConverterUtils.getDistributionFromSqlDistribution(
-                ((SqlAlterDistribution) alterTable).getDistribution());
+                ((SqlAlterTableDistribution) alterTable).getDistribution());
     }
 }

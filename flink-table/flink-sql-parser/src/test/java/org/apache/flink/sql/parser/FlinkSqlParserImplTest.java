@@ -18,7 +18,6 @@
 
 package org.apache.flink.sql.parser;
 
-import org.apache.flink.sql.parser.ddl.SqlCreateTable;
 import org.apache.flink.sql.parser.error.SqlValidateException;
 import org.apache.flink.sql.parser.impl.FlinkSqlParserImpl;
 
@@ -38,9 +37,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.Locale;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.fail;
 import static org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT;
 
 /** FlinkSqlParserImpl tests. * */
@@ -682,7 +679,7 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                         + "watermark for ts as ts - interval '1' second,\n"
                         + "^watermark^ for f1 as now()\n"
                         + ")")
-                .fails("Multiple WATERMARK statements is not supported yet.");
+                .fails("Multiple WATERMARK declarations are not supported yet.");
     }
 
     @Test
@@ -859,7 +856,7 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                         + "watermark for ts as ts - interval '1' second,\n"
                         + "^watermark^ for f1 as now()\n"
                         + ")")
-                .fails("Multiple WATERMARK statements is not supported yet.");
+                .fails("Multiple WATERMARK declarations are not supported yet.");
     }
 
     @Test
@@ -1695,7 +1692,7 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                         + "    'connector' = 'kafka', \n"
                         + "    'kafka.topic' = 'log.test'\n"
                         + ")\n";
-        sql(sql).fails("Multiple WATERMARK statements is not supported yet.");
+        sql(sql).fails("Multiple WATERMARK declarations are not supported yet.");
     }
 
     @Test
@@ -2262,6 +2259,34 @@ class FlinkSqlParserImplTest extends SqlParserTest {
     }
 
     @Test
+    void testInsertOnConflict() {
+        // ON CONFLICT DO ERROR
+        sql("INSERT INTO t1 SELECT * FROM t2 ON CONFLICT DO ERROR")
+                .ok("INSERT INTO `T1`\nSELECT *\nFROM `T2`\nON CONFLICT DO ERROR");
+
+        // ON CONFLICT DO NOTHING
+        sql("INSERT INTO t1 SELECT * FROM t2 ON CONFLICT DO NOTHING")
+                .ok("INSERT INTO `T1`\nSELECT *\nFROM `T2`\nON CONFLICT DO NOTHING");
+
+        // ON CONFLICT DO DEDUPLICATE
+        sql("INSERT INTO t1 SELECT * FROM t2 ON CONFLICT DO DEDUPLICATE")
+                .ok("INSERT INTO `T1`\nSELECT *\nFROM `T2`\nON CONFLICT DO DEDUPLICATE");
+
+        // ON CONFLICT with partition
+        sql("INSERT INTO t1 PARTITION (p='v') SELECT * FROM t2 ON CONFLICT DO ERROR")
+                .ok(
+                        "INSERT INTO `T1` PARTITION (`P` = 'v')\n\nSELECT *\nFROM `T2`\nON CONFLICT DO ERROR");
+
+        // ON CONFLICT with INSERT OVERWRITE (should work)
+        sql("INSERT OVERWRITE t1 SELECT * FROM t2 ON CONFLICT DO NOTHING")
+                .ok("INSERT OVERWRITE `T1`\nSELECT *\nFROM `T2`\nON CONFLICT DO NOTHING");
+
+        // Invalid ON CONFLICT strategy
+        sql("INSERT INTO t1 SELECT * FROM t2 ON CONFLICT DO ^UPDATE^")
+                .fails("(?s).*Encountered \"UPDATE\" at line 1, column 48.\n.*");
+    }
+
+    @Test
     void testCreateView() {
         final String sql = "create view v as select col1 from tbl";
         final String expected = "CREATE VIEW `V`\n" + "AS\n" + "SELECT `COL1`\n" + "FROM `TBL`";
@@ -2482,7 +2507,7 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                 .fails(
                         "CREATE SYSTEM FUNCTION is not supported, "
                                 + "system functions can only be registered as temporary "
-                                + "function, you can use CREATE TEMPORARY SYSTEM FUNCTION instead.");
+                                + "functions, you can use CREATE TEMPORARY SYSTEM FUNCTION instead.");
 
         // test create function using jar
         sql("create temporary function function1 as 'org.apache.flink.function.function1' language java using jar 'file:///path/to/test.jar'")
@@ -2641,6 +2666,27 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                                 + "INSERT INTO `T2`\n"
                                 + "SELECT *\n"
                                 + "FROM `T3`\n"
+                                + ";\n"
+                                + "END");
+    }
+
+    @Test
+    void testExecuteStatementSetWithOnConflict() {
+        sql("execute statement set begin "
+                        + "insert into t1 select * from t2 on conflict do deduplicate; "
+                        + "insert into t3 select * from t4 on conflict do nothing; "
+                        + "end")
+                .ok(
+                        "EXECUTE STATEMENT SET BEGIN\n"
+                                + "INSERT INTO `T1`\n"
+                                + "SELECT *\n"
+                                + "FROM `T2`\n"
+                                + "ON CONFLICT DO DEDUPLICATE\n"
+                                + ";\n"
+                                + "INSERT INTO `T3`\n"
+                                + "SELECT *\n"
+                                + "FROM `T4`\n"
+                                + "ON CONFLICT DO NOTHING\n"
                                 + ";\n"
                                 + "END");
     }
@@ -3266,6 +3312,12 @@ class FlinkSqlParserImplTest extends SqlParserTest {
     }
 
     @Test
+    void testDropTemporaryModel() {
+        sql("drop temporary model m1").ok("DROP TEMPORARY MODEL `M1`");
+        sql("drop temporary model if exists m1").ok("DROP TEMPORARY MODEL IF EXISTS `M1`");
+    }
+
+    @Test
     void testDropModelIfExists() {
         sql("drop model if exists catalog1.db1.m1")
                 .ok("DROP MODEL IF EXISTS `CATALOG1`.`DB1`.`M1`");
@@ -3483,6 +3535,254 @@ class FlinkSqlParserImplTest extends SqlParserTest {
                                 + "FROM TABLE(`ML_PREDICT`(`INPUT` => (TABLE `MY_TABLE`), `MODEL` => (MODEL `MY_MODEL`)))");
     }
 
+    // =====================================================================================
+    // Connection DDL/DQL Tests
+    // =====================================================================================
+
+    @Test
+    void testCreateConnection() {
+        sql("create connection conn1\n"
+                        + " COMMENT 'connection_comment'\n"
+                        + " WITH (\n"
+                        + "  'type'='basic',\n"
+                        + "  'url'='http://example.com',\n"
+                        + "  'username'='user1',\n"
+                        + "  'password'='pass1'\n"
+                        + " )\n")
+                .ok(
+                        "CREATE CONNECTION `CONN1`\n"
+                                + "COMMENT 'connection_comment'\n"
+                                + "WITH (\n"
+                                + "  'type' = 'basic',\n"
+                                + "  'url' = 'http://example.com',\n"
+                                + "  'username' = 'user1',\n"
+                                + "  'password' = 'pass1'\n"
+                                + ")");
+    }
+
+    @Test
+    void testCreateConnectionIfNotExists() {
+        sql("create connection if not exists conn1\n"
+                        + " WITH (\n"
+                        + "  'type'='bearer',\n"
+                        + "  'token'='my_token'\n"
+                        + " )\n")
+                .ok(
+                        "CREATE CONNECTION IF NOT EXISTS `CONN1`\n"
+                                + "WITH (\n"
+                                + "  'type' = 'bearer',\n"
+                                + "  'token' = 'my_token'\n"
+                                + ")");
+    }
+
+    @Test
+    void testCreateTemporaryConnection() {
+        sql("create temporary connection conn1\n"
+                        + " WITH (\n"
+                        + "  'type'='oauth',\n"
+                        + "  'client_id'='client1'\n"
+                        + " )\n")
+                .ok(
+                        "CREATE TEMPORARY CONNECTION `CONN1`\n"
+                                + "WITH (\n"
+                                + "  'type' = 'oauth',\n"
+                                + "  'client_id' = 'client1'\n"
+                                + ")");
+    }
+
+    @Test
+    void testCreateSystemConnection() {
+        sql("create ^system^ connection conn1\n"
+                        + " WITH (\n"
+                        + "  'type'='basic',\n"
+                        + "  'url'='http://example.com'\n"
+                        + " )\n")
+                .fails(
+                        "(?s)CREATE SYSTEM CONNECTION is not supported, "
+                                + "system connections can only be registered as temporary "
+                                + "connections, you can use CREATE TEMPORARY SYSTEM CONNECTION "
+                                + "instead\\..*");
+    }
+
+    @Test
+    void testCreateTemporarySystemConnection() {
+        sql("create temporary system connection conn1\n"
+                        + " WITH (\n"
+                        + "  'type'='custom_type',\n"
+                        + "  'api_key'='key123'\n"
+                        + " )\n")
+                .ok(
+                        "CREATE TEMPORARY SYSTEM CONNECTION `CONN1`\n"
+                                + "WITH (\n"
+                                + "  'type' = 'custom_type',\n"
+                                + "  'api_key' = 'key123'\n"
+                                + ")");
+    }
+
+    @Test
+    void testCreateConnectionWithQualifiedName() {
+        sql("create connection catalog1.db1.conn1\n"
+                        + " WITH ('type'='basic', 'url'='http://example.com')\n")
+                .ok(
+                        "CREATE CONNECTION `CATALOG1`.`DB1`.`CONN1`\n"
+                                + "WITH (\n"
+                                + "  'type' = 'basic',\n"
+                                + "  'url' = 'http://example.com'\n"
+                                + ")");
+    }
+
+    @Test
+    void testDropConnection() {
+        sql("drop connection conn1").ok("DROP CONNECTION `CONN1`");
+        sql("drop connection db1.conn1").ok("DROP CONNECTION `DB1`.`CONN1`");
+        sql("drop connection catalog1.db1.conn1").ok("DROP CONNECTION `CATALOG1`.`DB1`.`CONN1`");
+    }
+
+    @Test
+    void testDropConnectionIfExists() {
+        sql("drop connection if exists catalog1.db1.conn1")
+                .ok("DROP CONNECTION IF EXISTS `CATALOG1`.`DB1`.`CONN1`");
+    }
+
+    @Test
+    void testDropTemporaryConnection() {
+        sql("drop temporary connection conn1").ok("DROP TEMPORARY CONNECTION `CONN1`");
+        sql("drop temporary connection if exists conn1")
+                .ok("DROP TEMPORARY CONNECTION IF EXISTS `CONN1`");
+    }
+
+    @Test
+    void testDropTemporarySystemConnection() {
+        sql("drop temporary system connection conn1")
+                .ok("DROP TEMPORARY SYSTEM CONNECTION `CONN1`");
+        sql("drop temporary system connection if exists conn1")
+                .ok("DROP TEMPORARY SYSTEM CONNECTION IF EXISTS `CONN1`");
+    }
+
+    @Test
+    void testDropSystemConnection() {
+        sql("drop ^system^ connection conn1")
+                .fails(
+                        "(?s)DROP SYSTEM CONNECTION is not supported, "
+                                + "system connections can only be dropped as temporary "
+                                + "connections, you can use DROP TEMPORARY SYSTEM CONNECTION "
+                                + "instead\\..*");
+    }
+
+    @Test
+    void testAlterConnectionSet() {
+        final String sql =
+                "alter connection conn1 set ('password' = 'new_password','url' = 'http://new.com')";
+        final String expected =
+                "ALTER CONNECTION `CONN1` SET (\n"
+                        + "  'password' = 'new_password',\n"
+                        + "  'url' = 'http://new.com'\n"
+                        + ")";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionSetWithQualifiedName() {
+        final String sql = "alter connection catalog1.db1.conn1 set ('token' = 'new_token')";
+        final String expected =
+                "ALTER CONNECTION `CATALOG1`.`DB1`.`CONN1` SET (\n"
+                        + "  'token' = 'new_token'\n"
+                        + ")";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionRename() {
+        final String sql = "alter connection conn1 rename to conn2";
+        final String expected = "ALTER CONNECTION `CONN1` RENAME TO `CONN2`";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionRenameWithQualifiedName() {
+        final String sql = "alter connection catalog1.db1.conn1 rename to conn2";
+        final String expected = "ALTER CONNECTION `CATALOG1`.`DB1`.`CONN1` RENAME TO `CONN2`";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionReset() {
+        final String sql = "alter connection conn1 reset ('password', 'url')";
+        final String expected = "ALTER CONNECTION `CONN1` RESET (\n  'password',\n  'url'\n)";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionResetWithQualifiedName() {
+        final String sql = "alter connection catalog1.db1.conn1 reset ('token')";
+        final String expected = "ALTER CONNECTION `CATALOG1`.`DB1`.`CONN1` RESET (\n  'token'\n)";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionIfExists() {
+        final String sql =
+                "alter connection if exists conn1 set ('password' = 'new_password','url' = 'http://new.com')";
+        final String expected =
+                "ALTER CONNECTION IF EXISTS `CONN1` SET (\n"
+                        + "  'password' = 'new_password',\n"
+                        + "  'url' = 'http://new.com'\n"
+                        + ")";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionRenameIfExists() {
+        final String sql = "alter connection if exists conn1 rename to conn2";
+        final String expected = "ALTER CONNECTION IF EXISTS `CONN1` RENAME TO `CONN2`";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testAlterConnectionResetIfExists() {
+        final String sql = "alter connection if exists conn1 reset ('password', 'url')";
+        final String expected =
+                "ALTER CONNECTION IF EXISTS `CONN1` RESET (\n  'password',\n  'url'\n)";
+        sql(sql).ok(expected);
+    }
+
+    @Test
+    void testShowConnections() {
+        sql("show connections").ok("SHOW CONNECTIONS");
+        sql("show connections from db1").ok("SHOW CONNECTIONS FROM `DB1`");
+        sql("show connections from catalog1.db1").ok("SHOW CONNECTIONS FROM `CATALOG1`.`DB1`");
+        sql("show connections in db1").ok("SHOW CONNECTIONS IN `DB1`");
+        sql("show connections in catalog1.db1").ok("SHOW CONNECTIONS IN `CATALOG1`.`DB1`");
+    }
+
+    @Test
+    void testShowConnectionsLike() {
+        sql("show connections like '%conn%'").ok("SHOW CONNECTIONS LIKE '%CONN%'");
+        sql("show connections from db1 like 'my_%'").ok("SHOW CONNECTIONS FROM `DB1` LIKE 'MY_%'");
+        sql("show connections not like 'temp_%'").ok("SHOW CONNECTIONS NOT LIKE 'TEMP_%'");
+    }
+
+    @Test
+    void testShowCreateConnection() {
+        sql("show create connection conn1").ok("SHOW CREATE CONNECTION `CONN1`");
+        sql("show create connection catalog1.db1.conn1")
+                .ok("SHOW CREATE CONNECTION `CATALOG1`.`DB1`.`CONN1`");
+    }
+
+    @Test
+    void testDescribeConnection() {
+        sql("describe connection conn1").ok("DESCRIBE CONNECTION `CONN1`");
+        sql("describe connection catalog1.db1.conn1")
+                .ok("DESCRIBE CONNECTION `CATALOG1`.`DB1`.`CONN1`");
+        sql("describe connection extended conn1").ok("DESCRIBE CONNECTION EXTENDED `CONN1`");
+
+        sql("desc connection conn1").ok("DESCRIBE CONNECTION `CONN1`");
+        sql("desc connection catalog1.db1.conn1")
+                .ok("DESCRIBE CONNECTION `CATALOG1`.`DB1`.`CONN1`");
+        sql("desc connection extended catalog1.db1.conn1")
+                .ok("DESCRIBE CONNECTION EXTENDED `CATALOG1`.`DB1`.`CONN1`");
+    }
+
     /*
      * This test was backported from Calcite 1.38 (CALCITE-6266).
      * Remove it together with upgrade to Calcite 1.38.
@@ -3563,64 +3863,5 @@ class FlinkSqlParserImplTest extends SqlParserTest {
 
         sql("CREATE TABLE t (\n" + "v VARIANT NOT NULL" + "\n)")
                 .ok("CREATE TABLE `T` (\n" + "  `V` VARIANT NOT NULL\n" + ")");
-    }
-
-    /** Matcher that invokes the #validate() of the {@link ExtendedSqlNode} instance. * */
-    private static class ValidationMatcher extends BaseMatcher<SqlNode> {
-        private String expectedColumnSql;
-        private String failMsg;
-        private boolean ok;
-
-        public ValidationMatcher expectColumnSql(String s) {
-            this.expectedColumnSql = s;
-            return this;
-        }
-
-        public ValidationMatcher fails(String failMsg) {
-            this.failMsg = failMsg;
-            this.ok = false;
-            return this;
-        }
-
-        public ValidationMatcher ok() {
-            this.failMsg = null;
-            this.ok = true;
-            return this;
-        }
-
-        @Override
-        public void describeTo(Description description) {
-            description.appendText("test");
-        }
-
-        @Override
-        public boolean matches(Object item) {
-            if (item instanceof ExtendedSqlNode) {
-                ExtendedSqlNode createTable = (ExtendedSqlNode) item;
-
-                if (ok) {
-                    try {
-                        createTable.validate();
-                    } catch (SqlValidateException e) {
-                        fail("unexpected exception", e);
-                    }
-                } else if (failMsg != null) {
-                    try {
-                        createTable.validate();
-                        fail("expected exception");
-                    } catch (SqlValidateException e) {
-                        assertThat(e).hasMessage(failMsg);
-                    }
-                }
-
-                if (expectedColumnSql != null && item instanceof SqlCreateTable) {
-                    assertThat(((SqlCreateTable) createTable).getColumnSqlString())
-                            .isEqualTo(expectedColumnSql);
-                }
-                return true;
-            } else {
-                return false;
-            }
-        }
     }
 }
